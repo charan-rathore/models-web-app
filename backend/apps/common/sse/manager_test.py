@@ -150,6 +150,59 @@ class SSEConnectionManagerTest(unittest.TestCase):
             },
         )
 
+    def test_disconnected_namespace_watcher_cannot_update_new_clients(self):
+        manager = SSEConnectionManager()
+        old_queue = Queue()
+        new_queue = Queue()
+        callbacks = []
+
+        def watcher_factory(namespace, callback):
+            callbacks.append(callback)
+            return DummyWatcher()
+
+        manager.register_namespace_watch("kubeflow-user", old_queue, watcher_factory)
+        manager.unregister_namespace_watch("kubeflow-user", old_queue)
+        manager.register_namespace_watch("kubeflow-user", new_queue, watcher_factory)
+        callbacks[1]("INITIAL", {"items": [{"metadata": {"name": "current"}}]})
+        self._message(new_queue)
+        callbacks[0]("INITIAL", {"items": [{"metadata": {"name": "obsolete"}}]})
+        self.assertTrue(new_queue.empty())
+        late_queue = Queue()
+        manager.register_namespace_watch("kubeflow-user", late_queue, watcher_factory)
+        self.assertEqual(
+            self._message(late_queue)["items"][0]["metadata"]["name"], "current"
+        )
+
+    def test_disconnected_single_watcher_cannot_update_new_clients(self):
+        manager = SSEConnectionManager()
+        old_queue = Queue()
+        new_queue = Queue()
+        callbacks = []
+
+        def watcher_factory(namespace, name, callback):
+            callbacks.append(callback)
+            return DummyWatcher()
+
+        manager.register_single_watch(
+            "kubeflow-user", "model", old_queue, watcher_factory
+        )
+        manager.unregister_single_watch("kubeflow-user", "model", old_queue)
+        manager.register_single_watch(
+            "kubeflow-user", "model", new_queue, watcher_factory
+        )
+        current = {"metadata": {"name": "model"}, "status": {"ready": True}}
+        callbacks[1]("INITIAL", current)
+        self._message(new_queue)
+        callbacks[0]("DELETED", {"metadata": {"name": "model"}})
+        self.assertTrue(new_queue.empty())
+        late_queue = Queue()
+        manager.register_single_watch(
+            "kubeflow-user", "model", late_queue, watcher_factory
+        )
+        self.assertEqual(
+            self._message(late_queue), {"type": "INITIAL", "object": current}
+        )
+
     def test_namespace_reconnect_does_not_replace_new_watcher_with_old_watcher(self):
         manager = SSEConnectionManager()
         first_queue = Queue()

@@ -18,11 +18,13 @@ class SSEConnectionManager:
         """Initialize the SSE connection manager."""
         self._namespace_watchers: Dict[str, Any] = {}
         self._single_watchers: Dict[str, Any] = {}
+        self._namespace_generations: Dict[str, object] = {}
+        self._single_generations: Dict[str, object] = {}
         self._namespace_clients: Dict[str, Set[Queue]] = {}
         self._single_clients: Dict[str, Set[Queue]] = {}
         self._namespace_initial_events: Dict[str, Tuple[str, Any]] = {}
         self._single_initial_events: Dict[str, Tuple[str, Any]] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     def register_namespace_watch(
         self, namespace: str, client_queue: Queue, watcher_factory: Callable
@@ -51,13 +53,22 @@ class SSEConnectionManager:
             if watch_key not in self._namespace_watchers:
                 watcher_token = object()
                 self._namespace_watchers[watch_key] = watcher_token
+                self._namespace_generations[watch_key] = watcher_token
                 start_watcher = True
 
                 def callback(event_type, obj):
-                    self._record_namespace_event(watch_key, event_type, obj)
-                    self._broadcast_to_clients(
-                        self._namespace_clients, watch_key, event_type, obj
-                    )
+                    # A stopped watcher can still finish an in-flight callback.
+                    # Keep generation validation, snapshot and delivery atomic.
+                    with self._lock:
+                        if (
+                            self._namespace_generations.get(watch_key)
+                            is not watcher_token
+                        ):
+                            return
+                        self._record_namespace_event(watch_key, event_type, obj)
+                        self._broadcast_to_clients(
+                            self._namespace_clients, watch_key, event_type, obj
+                        )
 
         if event_to_replay:
             self._broadcast_to_client(client_queue, *event_to_replay)
@@ -106,13 +117,19 @@ class SSEConnectionManager:
             if watch_key not in self._single_watchers:
                 watcher_token = object()
                 self._single_watchers[watch_key] = watcher_token
+                self._single_generations[watch_key] = watcher_token
                 start_watcher = True
 
                 def callback(event_type, obj):
-                    self._record_single_event(watch_key, event_type, obj)
-                    self._broadcast_to_clients(
-                        self._single_clients, watch_key, event_type, obj
-                    )
+                    # A stopped watcher can still finish an in-flight callback.
+                    # Keep generation validation, snapshot and delivery atomic.
+                    with self._lock:
+                        if self._single_generations.get(watch_key) is not watcher_token:
+                            return
+                        self._record_single_event(watch_key, event_type, obj)
+                        self._broadcast_to_clients(
+                            self._single_clients, watch_key, event_type, obj
+                        )
 
         if event_to_replay:
             self._broadcast_to_client(client_queue, *event_to_replay)
@@ -151,6 +168,7 @@ class SSEConnectionManager:
                 if not self._namespace_clients[watch_key]:
                     del self._namespace_clients[watch_key]
                     self._namespace_initial_events.pop(watch_key, None)
+                    self._namespace_generations.pop(watch_key, None)
                     watcher_to_stop = self._namespace_watchers.pop(watch_key, None)
 
         if watcher_to_stop and hasattr(watcher_to_stop, "stop"):
@@ -175,6 +193,7 @@ class SSEConnectionManager:
                 if not self._single_clients[watch_key]:
                     del self._single_clients[watch_key]
                     self._single_initial_events.pop(watch_key, None)
+                    self._single_generations.pop(watch_key, None)
                     watcher_to_stop = self._single_watchers.pop(watch_key, None)
 
         if watcher_to_stop and hasattr(watcher_to_stop, "stop"):
