@@ -70,8 +70,10 @@ class SSEConnectionManager:
                             self._namespace_clients, watch_key, event_type, obj
                         )
 
-        if event_to_replay:
-            self._broadcast_to_client(client_queue, *event_to_replay)
+            # Replay while still holding the lock. A watcher callback needs the
+            # same lock, so it cannot enqueue a newer event ahead of this snapshot.
+            if event_to_replay:
+                self._broadcast_to_client(client_queue, *event_to_replay)
 
         if start_watcher:
             watcher = watcher_factory(namespace, callback)
@@ -131,8 +133,10 @@ class SSEConnectionManager:
                             self._single_clients, watch_key, event_type, obj
                         )
 
-        if event_to_replay:
-            self._broadcast_to_client(client_queue, *event_to_replay)
+            # Replay while still holding the lock, so a watcher callback cannot
+            # enqueue a newer event ahead of this snapshot.
+            if event_to_replay:
+                self._broadcast_to_client(client_queue, *event_to_replay)
 
         if start_watcher:
             watcher = watcher_factory(namespace, name, callback)
