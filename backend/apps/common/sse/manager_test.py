@@ -150,7 +150,9 @@ class SSEConnectionManagerTest(unittest.TestCase):
             },
         )
 
-    def _late_client_with_racing_event(self, register, newer):
+    def _late_client_with_racing_event(
+        self, register_client_callable, deliver_newer_event_callable
+    ):
         """Register a late client while a watcher delivers a newer event.
 
         The late client's queue starts the watcher callback from another thread
@@ -161,20 +163,22 @@ class SSEConnectionManagerTest(unittest.TestCase):
         class RacingQueue(Queue):
             def __init__(self):
                 super().__init__()
-                self.fired = False
-                self.worker = None
+                self.has_started_racing_event = False
+                self.racing_event_thread = None
 
             def put_nowait(self, item):
-                if not self.fired:
-                    self.fired = True
-                    self.worker = threading.Thread(target=newer)
-                    self.worker.start()
-                    self.worker.join(timeout=0.3)
+                if not self.has_started_racing_event:
+                    self.has_started_racing_event = True
+                    self.racing_event_thread = threading.Thread(
+                        target=deliver_newer_event_callable
+                    )
+                    self.racing_event_thread.start()
+                    self.racing_event_thread.join(timeout=0.3)
                 super().put_nowait(item)
 
         queue = RacingQueue()
-        register(queue)
-        queue.worker.join(timeout=5)
+        register_client_callable(queue)
+        queue.racing_event_thread.join(timeout=5)
         return queue
 
     def test_namespace_replay_is_not_overtaken_by_a_newer_event(self):
