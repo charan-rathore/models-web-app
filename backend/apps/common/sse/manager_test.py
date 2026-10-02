@@ -206,7 +206,9 @@ class SSEConnectionManagerTest(unittest.TestCase):
             callbacks.append(callback)
             return DummyWatcher()
 
-        manager.register_single_watch("kubeflow-user", "model-a", Queue(), watcher_factory)
+        manager.register_single_watch(
+            "kubeflow-user", "model-a", Queue(), watcher_factory
+        )
         callbacks[0]("INITIAL", {"metadata": {"name": "model-a"}, "v": 1})
 
         late = self._late_client_with_racing_event(
