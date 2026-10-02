@@ -150,6 +150,75 @@ class SSEConnectionManagerTest(unittest.TestCase):
             },
         )
 
+    def _late_client_with_racing_event(self, register, newer):
+        """Register a late client while a watcher delivers a newer event.
+
+        The late client's queue starts the watcher callback from another thread
+        the moment the replayed snapshot is enqueued, and waits briefly for it.
+        """
+        import threading
+
+        class RacingQueue(Queue):
+            def __init__(self):
+                super().__init__()
+                self.fired = False
+                self.worker = None
+
+            def put_nowait(self, item):
+                if not self.fired:
+                    self.fired = True
+                    self.worker = threading.Thread(target=newer)
+                    self.worker.start()
+                    self.worker.join(timeout=0.3)
+                super().put_nowait(item)
+
+        queue = RacingQueue()
+        register(queue)
+        queue.worker.join(timeout=5)
+        return queue
+
+    def test_namespace_replay_is_not_overtaken_by_a_newer_event(self):
+        manager = SSEConnectionManager()
+        callbacks = []
+
+        def watcher_factory(namespace, callback):
+            callbacks.append(callback)
+            return DummyWatcher()
+
+        manager.register_namespace_watch("kubeflow-user", Queue(), watcher_factory)
+        callbacks[0]("INITIAL", {"items": [{"metadata": {"name": "model-a"}}]})
+
+        late = self._late_client_with_racing_event(
+            lambda queue: manager.register_namespace_watch(
+                "kubeflow-user", queue, watcher_factory
+            ),
+            lambda: callbacks[0]("ADDED", {"metadata": {"name": "model-b"}}),
+        )
+
+        self.assertEqual(self._message(late)["type"], "INITIAL")
+        self.assertEqual(self._message(late)["type"], "ADDED")
+
+    def test_single_replay_is_not_overtaken_by_a_newer_event(self):
+        manager = SSEConnectionManager()
+        callbacks = []
+
+        def watcher_factory(namespace, name, callback):
+            callbacks.append(callback)
+            return DummyWatcher()
+
+        manager.register_single_watch("kubeflow-user", "model-a", Queue(), watcher_factory)
+        callbacks[0]("INITIAL", {"metadata": {"name": "model-a"}, "v": 1})
+
+        late = self._late_client_with_racing_event(
+            lambda queue: manager.register_single_watch(
+                "kubeflow-user", "model-a", queue, watcher_factory
+            ),
+            lambda: callbacks[0]("MODIFIED", {"metadata": {"name": "model-a"}, "v": 2}),
+        )
+
+        self.assertEqual(self._message(late)["type"], "INITIAL")
+        self.assertEqual(self._message(late)["type"], "MODIFIED")
+
     def test_disconnected_namespace_watcher_cannot_update_new_clients(self):
         manager = SSEConnectionManager()
         old_queue = Queue()
