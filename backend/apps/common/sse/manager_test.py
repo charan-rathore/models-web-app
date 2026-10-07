@@ -192,15 +192,15 @@ class SSEConnectionManagerTest(unittest.TestCase):
         manager.register_namespace_watch("kubeflow-user", Queue(), watcher_factory)
         callbacks[0]("INITIAL", {"items": [{"metadata": {"name": "model-a"}}]})
 
-        late = self._late_client_with_racing_event(
+        late_client_queue = self._late_client_with_racing_event(
             lambda queue: manager.register_namespace_watch(
                 "kubeflow-user", queue, watcher_factory
             ),
             lambda: callbacks[0]("ADDED", {"metadata": {"name": "model-b"}}),
         )
 
-        self.assertEqual(self._message(late)["type"], "INITIAL")
-        self.assertEqual(self._message(late)["type"], "ADDED")
+        self.assertEqual(self._message(late_client_queue)["type"], "INITIAL")
+        self.assertEqual(self._message(late_client_queue)["type"], "ADDED")
 
     def test_single_replay_is_not_overtaken_by_a_newer_event(self):
         manager = SSEConnectionManager()
@@ -215,15 +215,15 @@ class SSEConnectionManagerTest(unittest.TestCase):
         )
         callbacks[0]("INITIAL", {"metadata": {"name": "model-a"}, "v": 1})
 
-        late = self._late_client_with_racing_event(
+        late_client_queue = self._late_client_with_racing_event(
             lambda queue: manager.register_single_watch(
                 "kubeflow-user", "model-a", queue, watcher_factory
             ),
             lambda: callbacks[0]("MODIFIED", {"metadata": {"name": "model-a"}, "v": 2}),
         )
 
-        self.assertEqual(self._message(late)["type"], "INITIAL")
-        self.assertEqual(self._message(late)["type"], "MODIFIED")
+        self.assertEqual(self._message(late_client_queue)["type"], "INITIAL")
+        self.assertEqual(self._message(late_client_queue)["type"], "MODIFIED")
 
     def test_disconnected_namespace_watcher_cannot_update_new_clients(self):
         manager = SSEConnectionManager()
@@ -265,8 +265,8 @@ class SSEConnectionManagerTest(unittest.TestCase):
         manager.register_single_watch(
             "kubeflow-user", "model", new_queue, watcher_factory
         )
-        current = {"metadata": {"name": "model"}, "status": {"ready": True}}
-        callbacks[1]("INITIAL", current)
+        current_object = {"metadata": {"name": "model"}, "status": {"ready": True}}
+        callbacks[1]("INITIAL", current_object)
         self._message(new_queue)
         callbacks[0]("DELETED", {"metadata": {"name": "model"}})
         self.assertTrue(new_queue.empty())
@@ -275,7 +275,7 @@ class SSEConnectionManagerTest(unittest.TestCase):
             "kubeflow-user", "model", late_queue, watcher_factory
         )
         self.assertEqual(
-            self._message(late_queue), {"type": "INITIAL", "object": current}
+            self._message(late_queue), {"type": "INITIAL", "object": current_object}
         )
 
     def test_namespace_reconnect_does_not_replace_new_watcher_with_old_watcher(self):
